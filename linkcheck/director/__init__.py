@@ -49,7 +49,8 @@ def check_urls(aggregate):
         check_url(aggregate)
         aggregate.finish()
         aggregate.end_log_output()
-        _cleanup_persistence(aggregate, interrupted=False)
+        interrupted = getattr(aggregate, '_pause_requested', False)
+        _cleanup_persistence(aggregate, interrupted=interrupted)
     except LinkCheckerInterrupt:
         raise
     except KeyboardInterrupt:

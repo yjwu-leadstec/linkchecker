@@ -86,6 +86,19 @@ class TestCheckRunner:
         assert runner.aggregate.cancelled is True
         assert result == "/tmp/cache.db"
 
+    def test_pause_sets_aggregate_flag(self):
+        """pause_check should set _pause_requested on the aggregate."""
+        runner = CheckRunner()
+
+        class FakeAggregate:
+            def cancel(self):
+                pass
+
+        runner.aggregate = FakeAggregate()
+        runner._last_cache_db = "/tmp/cache.db"
+        runner.pause_check()
+        assert runner.aggregate._pause_requested is True
+
     def test_cancel_only_calls_cancel(self):
         runner = CheckRunner()
 

@@ -131,6 +131,7 @@ class CheckRunner:
         agg = self.aggregate
         if agg is not None:
             self._pause_requested = True
+            agg._pause_requested = True
             agg.cancel()
             return self._last_cache_db
         return None

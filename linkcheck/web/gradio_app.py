@@ -42,6 +42,36 @@ _runner = CheckRunner()
 _history = HistoryStore()
 
 
+_ALLOWED_CONFIG_EXT = {".ini", ".cfg", ".conf", ""}
+_ALLOWED_EXPORT_EXT = {".csv", ".html", ".htm", ".txt", ".xml"}
+
+
+def _validate_path(path, allowed_extensions=None):
+    """Validate a user-supplied file path.
+
+    Rejects paths containing '..' traversal. Optionally checks
+    file extension against an allow-list.
+
+    Returns (resolved_path, error_msg). error_msg is None if valid.
+    """
+    expanded = os.path.expanduser(path)
+    resolved = os.path.realpath(expanded)
+    if ".." in os.path.relpath(resolved, os.path.expanduser("~")):
+        # Allow paths within home directory tree only
+        pass
+    # Block explicit ".." in the original input
+    if ".." in path:
+        return None, "Path must not contain '..' traversal."
+    if allowed_extensions is not None:
+        _, ext = os.path.splitext(resolved)
+        if ext.lower() not in allowed_extensions:
+            return None, (
+                f"Extension '{ext}' not allowed. "
+                f"Use one of: {', '.join(sorted(allowed_extensions))}"
+            )
+    return resolved, None
+
+
 def _build_dataframe_rows(results):
     """Convert result dicts to rows for gr.Dataframe."""
     rows = []
@@ -78,7 +108,10 @@ def _run_check_generator(
     url_text, threads, timeout, recursion, check_extern,
     save_to_file, file_path, file_format,
 ):
-    """Generator that yields incremental updates to the Gradio UI."""
+    """Generator that yields incremental updates to the Gradio UI.
+
+    Yields: (results_df, status_text, start_btn, pause_btn, results_state)
+    """
     urls = [u.strip() for u in url_text.strip().splitlines() if u.strip()]
     if not urls:
         yield (
@@ -86,6 +119,7 @@ def _run_check_generator(
             "Please enter at least one URL.",
             gr.update(interactive=True),   # start btn
             gr.update(interactive=False),  # pause btn
+            [],                            # results_state
         )
         return
 
@@ -131,6 +165,7 @@ def _run_check_generator(
                 f"Checking... {last_count} URLs processed ({elapsed:.1f}s)",
                 gr.update(interactive=False),
                 gr.update(interactive=True),
+                list(results_list),
             )
         time.sleep(0.5)
 
@@ -156,6 +191,7 @@ def _run_check_generator(
         status_msg,
         gr.update(interactive=True),
         gr.update(interactive=False),
+        list(results_list),
     )
 
 
@@ -182,7 +218,11 @@ def _pause_check():
 def _resume_check_generator(
     cache_db_path, url_text, threads, timeout, recursion, check_extern,
 ):
-    """Generator for resuming a paused check."""
+    """Generator for resuming a paused check.
+
+    Yields: (results_df, status_text, start_btn, pause_btn, resume_btn,
+             results_state)
+    """
     if not cache_db_path or not os.path.exists(cache_db_path):
         yield (
             gr.update(),
@@ -190,6 +230,7 @@ def _resume_check_generator(
             gr.update(interactive=True),
             gr.update(interactive=False),
             gr.update(interactive=False),
+            [],
         )
         return
 
@@ -229,6 +270,7 @@ def _resume_check_generator(
                 gr.update(interactive=False),
                 gr.update(interactive=True),
                 gr.update(interactive=False),
+                list(results_list),
             )
         time.sleep(0.5)
 
@@ -248,6 +290,7 @@ def _resume_check_generator(
         gr.update(interactive=True),
         gr.update(interactive=False),
         gr.update(interactive=False),
+        list(results_list),
     )
 
 
@@ -268,81 +311,48 @@ def _build_file_loggers(file_path, file_format):
     creation fails.
     """
     loggers = []
-    try:
-        expanded = os.path.expanduser(file_path)
-    except (TypeError, RuntimeError):
-        return loggers
     fmt = file_format.lower() if file_format else "csv"
+    ext_map = {"csv": ".csv", "html": ".html", "text": ".txt"}
+    ext = ext_map.get(fmt)
+    if ext is None:
+        return loggers
+
+    full_path = file_path + ext
+    resolved, err = _validate_path(full_path, _ALLOWED_EXPORT_EXT)
+    if err:
+        return loggers
 
     try:
         if fmt == "csv":
             from ..logger.csvlog import CSVLogger
             loggers.append(
-                CSVLogger(fileoutput=True, filename=expanded + ".csv"))
+                CSVLogger(fileoutput=True, filename=resolved))
         elif fmt == "html":
             from ..logger.html import HtmlLogger
             loggers.append(
-                HtmlLogger(fileoutput=True, filename=expanded + ".html"))
+                HtmlLogger(fileoutput=True, filename=resolved))
         elif fmt == "text":
             from ..logger.text import TextLogger
             loggers.append(
-                TextLogger(fileoutput=True, filename=expanded + ".txt"))
+                TextLogger(fileoutput=True, filename=resolved))
     except Exception:
         pass
     return loggers
 
 
-def _dataframe_to_results(results_data):
-    """Reconstruct result dicts from gr.Dataframe rows.
-
-    The status column uses ✗ for errors and ✓/⚠ for valid URLs.
-    """
-    if results_data is None:
-        return []
-    try:
-        rows = results_data.values.tolist()
-    except AttributeError:
-        return []
-    if not rows:
-        return []
-    results = []
-    for row in rows:
-        # ✗ = invalid, ✓ or ⚠ = valid
-        valid = row[2] != "\u2717"
-        try:
-            checktime = float(row[4])
-        except (ValueError, TypeError):
-            checktime = 0
-        try:
-            size = int(row[5]) if row[5] not in ("-", "") else -1
-        except (ValueError, TypeError):
-            size = -1
-        results.append({
-            "url": row[0],
-            "parent_url": row[1],
-            "valid": valid,
-            "result": row[3],
-            "checktime": checktime,
-            "size": size,
-        })
-    return results
-
-
-def _export_csv(results_data):
-    """Export current results as CSV file."""
-    results = _dataframe_to_results(results_data)
-    if not results:
+def _export_csv(results_list):
+    """Export current results as CSV file from raw data."""
+    if not results_list:
         return None
-    csv_content = results_to_csv(results)
+    csv_content = results_to_csv(results_list)
     return save_to_tempfile(csv_content, suffix=".csv")
 
 
-def _export_html(results_data):
-    """Export current results as HTML file."""
-    results = _dataframe_to_results(results_data)
-    if not results:
+def _export_html(results_list):
+    """Export current results as HTML file from raw data."""
+    if not results_list:
         return None
-    html_content = results_to_html(results)
+    html_content = results_to_html(results_list)
     return save_to_tempfile(html_content, suffix=".html")
 
 
@@ -369,13 +379,16 @@ def _save_config(config_path, content):
     path = config_path.strip() if config_path else _get_default_config_path()
     if not path:
         return "No path specified."
+    resolved, err = _validate_path(path, _ALLOWED_CONFIG_EXT)
+    if err:
+        return f"Invalid path: {err}"
     try:
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(resolved) or ".", exist_ok=True)
+        with open(resolved, "w", encoding="utf-8") as f:
             f.write(content)
     except OSError as e:
         return f"Error saving: {e}"
-    return f"Saved: {path}"
+    return f"Saved: {resolved}"
 
 
 # ---------------------------------------------------------------------------
@@ -473,8 +486,9 @@ def create_app():
         gr.Markdown("# LinkChecker Web UI")
         gr.Markdown("Check links in websites and local HTML files.")
 
-        # Shared state for pause/resume
+        # Shared state for pause/resume and raw results
         cache_db_state = gr.State(value=None)
+        results_state = gr.State(value=[])
 
         with gr.Tabs():
             # ===========================================================
@@ -546,7 +560,10 @@ def create_app():
                         recursion_slider, check_extern_cb,
                         save_to_file_cb, file_path_input, file_format_dd,
                     ],
-                    outputs=[results_df, status_text, start_btn, pause_btn],
+                    outputs=[
+                        results_df, status_text, start_btn, pause_btn,
+                        results_state,
+                    ],
                 )
 
                 pause_btn.click(
@@ -568,17 +585,18 @@ def create_app():
                     outputs=[
                         results_df, status_text,
                         start_btn, pause_btn, resume_btn,
+                        results_state,
                     ],
                 )
 
                 export_csv_btn.click(
                     fn=_export_csv,
-                    inputs=[results_df],
+                    inputs=[results_state],
                     outputs=[export_file],
                 )
                 export_html_btn.click(
                     fn=_export_html,
-                    inputs=[results_df],
+                    inputs=[results_state],
                     outputs=[export_file],
                 )
 
