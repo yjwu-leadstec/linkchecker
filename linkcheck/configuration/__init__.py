@@ -156,6 +156,10 @@ class Configuration(dict):
         self["recursionlevel"] = -1
         self["useragent"] = UserAgent
         self["resultcachesize"] = 100000
+        # persistence
+        self["persist"] = False
+        self["resume"] = False
+        self["cache_db"] = "linkchecker-cache.db"
         # authentication
         self["authentication"] = []
         self["loginurl"] = None
@@ -197,8 +201,10 @@ class Configuration(dict):
 
     def logger_new(self, loggername, **kwargs):
         """Instantiate new logger and return it."""
-        args = self[loggername]
+        args = self[loggername].copy()
         args.update(kwargs)
+        if self.get("resume"):
+            args["filemode"] = "ab"
         return self.loggers[loggername](**args)
 
     def logger_add(self, loggerclass):

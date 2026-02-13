@@ -183,6 +183,8 @@ class _Logger(abc.ABC):
         self.codec_errors = "replace"
         # Flag to see if logger is active. Can be deactivated on errors.
         self.is_active = True
+        # file opening mode
+        self.filemode = args.get("filemode", "wb")
 
     def get_args(self, kwargs):
         """Construct log configuration from default and user args."""
@@ -247,7 +249,7 @@ class _Logger(abc.ABC):
                 encoding=self.output_encoding, errors=self.codec_errors
             )
         return i18n.get_encoded_writer(
-            open(self.filename, "wb"), self.output_encoding, self.codec_errors)
+            open(self.filename, self.filemode), self.output_encoding, self.codec_errors)
 
     def close_fileoutput(self):
         """

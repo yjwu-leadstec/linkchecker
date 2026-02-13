@@ -245,6 +245,33 @@ class ArgParser(LCArgumentParser):
             action="store_true",
             help=_("Read list of white-space separated URLs to check from stdin."),
         )
+        group.add_argument(
+            "--persist",
+            action="store_true",
+            default=False,
+            help=_(
+                "Enable SQLite persistence for URL queue and result cache.\n"
+                "This reduces memory usage for large sites and enables resume."
+            ),
+        )
+        group.add_argument(
+            "--resume",
+            action="store_true",
+            default=False,
+            help=_(
+                "Resume a previously interrupted check. Implies --persist.\n"
+                "Only checks URLs that were not completed in the previous run."
+            ),
+        )
+        group.add_argument(
+            "--cache-db",
+            dest="cache_db",
+            metavar="FILENAME",
+            help=_(
+                "Path to the SQLite cache database file.\n"
+                "Default: linkchecker-cache.db in the current directory."
+            ),
+        )
 
         # ================== output options =====================
         group = self.add_argument_group(_("Output options"))

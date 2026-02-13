@@ -54,3 +54,7 @@ linkcheck/_release.py
 # AI generated files
 .agent/
 *.code-workspace
+CLAUDE.md
+.cursorrules
+.windsurfrules
+

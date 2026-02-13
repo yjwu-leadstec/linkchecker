@@ -166,14 +166,31 @@ def linkchecker():
         trace.trace_filter([r"^linkcheck"])
         trace.trace_on()
     # add urls to queue
-    if options.stdin:
-        for url in read_stdin_urls():
-            aggregate_url(aggregate, url)
-    elif options.url:
-        for url in options.url:
-            aggregate_url(aggregate, stripurl(url))
-    else:
-        log.warn(LOG_CMDLINE, _("no files or URLs given"))
+    skip_url_add = False
+    if config["resume"] and hasattr(aggregate, 'sqlite_store'):
+        stats = aggregate.sqlite_store.get_queue_stats()
+        pending = stats.get('pending', 0) + stats.get('in_progress', 0)
+        if pending > 0:
+            log.info(
+                LOG_CMDLINE,
+                _("Resuming previous check with %d pending URLs.") % pending,
+            )
+            skip_url_add = True
+        else:
+            log.info(
+                LOG_CMDLINE,
+                _("No pending URLs found. Starting fresh check."),
+            )
+
+    if not skip_url_add:
+        if options.stdin:
+            for url in read_stdin_urls():
+                aggregate_url(aggregate, url)
+        elif options.url:
+            for url in options.url:
+                aggregate_url(aggregate, stripurl(url))
+        else:
+            log.warn(LOG_CMDLINE, _("no files or URLs given"))
     # set up profiling
     do_profile = False
     if options.profile:

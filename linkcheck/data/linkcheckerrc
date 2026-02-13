@@ -187,6 +187,15 @@
 #allowedschemes=http,https
 # Size of the result cache. Checking more urls might increase memory usage during runtime
 #resultcachesize=100000
+# Enable SQLite persistence for URL queue and result cache.
+# This reduces memory usage for large sites and enables the resume feature.
+#persist=0
+# Resume a previously interrupted check. Implies persist=1.
+# Only works if a cache database from a previous run exists.
+#resume=0
+# Path to the SQLite cache database file used for persistence.
+# Default is linkchecker-cache.db in the current directory.
+#cache_db=linkchecker-cache.db
 
 ##################### filtering options ##########################
 [filtering]

@@ -69,6 +69,15 @@ def setup_config(config, options):
             "Checking intern URLs only; use --check-extern to check extern URLs.",
         )
 
+    # persistence options
+    if getattr(options, 'resume', False):
+        config["resume"] = True
+        config["persist"] = True  # resume implies persist
+    if getattr(options, 'persist', False):
+        config["persist"] = True
+    if getattr(options, 'cache_db', None):
+        config["cache_db"] = options.cache_db
+
     if options.output:
         if "/" in options.output:
             logtype, encoding = options.output.split("/", 1)
@@ -210,3 +219,4 @@ def setup_config(config, options):
                 _("Could not read cookie file %s") % options.cookiefile)
         else:
             config["cookiefile"] = options.cookiefile
+

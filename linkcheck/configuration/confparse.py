@@ -217,6 +217,11 @@ class LCConfigParser(ConfigParser):
             self.read_string_option(section, "sslverify")
         self.read_int_option(section, "maxrunseconds", min=0)
         self.read_int_option(section, "resultcachesize", min=0)
+        self.read_boolean_option(section, "persist")
+        self.read_boolean_option(section, "resume")
+        if self.config["resume"]:
+            self.config["persist"] = True
+        self.read_string_option(section, "cache_db")
 
     def read_authentication_config(self):
         """Read configuration options in section "authentication"."""

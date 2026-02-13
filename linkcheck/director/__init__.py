@@ -49,6 +49,7 @@ def check_urls(aggregate):
         check_url(aggregate)
         aggregate.finish()
         aggregate.end_log_output()
+        _cleanup_persistence(aggregate, interrupted=False)
     except LinkCheckerInterrupt:
         raise
     except KeyboardInterrupt:
@@ -105,10 +106,12 @@ def abort(aggregate):
             aggregate.abort()
             aggregate.finish()
             aggregate.end_log_output(interrupt=True)
+            _cleanup_persistence(aggregate, interrupted=True)
             break
         except KeyboardInterrupt:
             log.warn(LOG_CHECK, _("user abort; force shutdown"))
             aggregate.end_log_output(interrupt=True)
+            _cleanup_persistence(aggregate, interrupted=True)
             abort_now()
 
 
@@ -129,12 +132,102 @@ def abort_now():
         os._exit(3)
 
 
+def _cleanup_persistence(aggregate, interrupted):
+    """Handle SQLite persistence lifecycle after check completion.
+
+    If interrupted, keep the database for resume. If completed normally,
+    delete the database file.
+    """
+    if not hasattr(aggregate, 'sqlite_store'):
+        return
+    try:
+        if interrupted:
+            log.info(
+                LOG_CHECK,
+                _("Check interrupted. Use --resume to continue "
+                  "from where you left off."),
+            )
+        else:
+            aggregate.sqlite_store.delete_db()
+            log.info(
+                LOG_CHECK,
+                _("Check completed, cache database removed."),
+            )
+    finally:
+        aggregate.sqlite_store.close()
+
+
 def get_aggregate(config):
-    """Get an aggregator instance with given configuration."""
-    _urlqueue = urlqueue.UrlQueue(max_allowed_urls=config["maxnumurls"])
+    """Get an aggregator instance with given configuration.
+
+    When config['persist'] is True, uses SQLite-backed persistent queue
+    and result cache instead of in-memory versions.
+    """
+    if config["persist"]:
+        from ..cache.sqlite_store import SqliteStore
+        from ..cache.persistent_result_cache import PersistentResultCache
+        from ..cache.persistent_url_queue import PersistentUrlQueue
+
+        db_path = config["cache_db"]
+
+        if config["resume"]:
+            sqlite_store = SqliteStore(db_path)
+            # Check config consistency on resume
+            saved = sqlite_store.get_metadata('config_snapshot')
+            if saved:
+                for key in ('recursionlevel', 'checkextern'):
+                    if saved.get(key) != config.get(key):
+                        log.warn(
+                            LOG_CHECK,
+                            _("Config '%(key)s' changed from %(old)r "
+                              "to %(new)r since last run.") % dict(
+                                key=key, old=saved[key], new=config[key]),
+                        )
+            # Reset in_progress and clear corresponding placeholders
+            reset_count = sqlite_store.reset_in_progress()
+            if reset_count:
+                log.info(
+                    LOG_CHECK,
+                    _("Resumed: reset %d in-progress URLs.") % reset_count,
+                )
+            stats = sqlite_store.get_queue_stats()
+            log.info(
+                LOG_CHECK,
+                _("Resume stats: %(pending)d pending, %(done)d done, "
+                  "%(skipped)d skipped.") % stats,
+            )
+        else:
+            # New scan: remove old database
+            if os.path.exists(db_path):
+                temp_store = SqliteStore(db_path)
+                temp_store.delete_db()
+            sqlite_store = SqliteStore(db_path)
+            # Save config snapshot for resume consistency check
+            sqlite_store.set_metadata('config_snapshot', {
+                'recursionlevel': config['recursionlevel'],
+                'checkextern': config['checkextern'],
+                'maxnumurls': config['maxnumurls'],
+            })
+
+        _urlqueue = PersistentUrlQueue(
+            sqlite_store, max_allowed_urls=config["maxnumurls"],
+        )
+        result_cache = PersistentResultCache(sqlite_store)
+    else:
+        # Original in-memory mode
+        _urlqueue = urlqueue.UrlQueue(max_allowed_urls=config["maxnumurls"])
+        result_cache = results.ResultCache(config["resultcachesize"])
+        sqlite_store = None
+
     _robots_txt = robots_txt.RobotsTxt(config["useragent"])
     plugin_manager = plugins.PluginManager(config)
-    result_cache = results.ResultCache(config["resultcachesize"])
-    return aggregator.Aggregate(
+
+    aggregate = aggregator.Aggregate(
         config, _urlqueue, _robots_txt, plugin_manager, result_cache
     )
+
+    if sqlite_store is not None:
+        aggregate.sqlite_store = sqlite_store
+        _urlqueue.set_aggregate(aggregate)
+
+    return aggregate
