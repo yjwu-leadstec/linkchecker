@@ -17,6 +17,7 @@ class TestCheckRunner:
         assert runner.is_running is False
         assert runner.aggregate is None
         assert runner.error is None
+        assert runner._pause_requested is False
 
     def test_concurrent_check_raises(self):
         runner = CheckRunner()
@@ -67,6 +68,36 @@ class TestCheckRunner:
         )
         assert config["persist"] is True
         assert config["cache_db"].endswith("web-cache.db")
+
+    def test_pause_sets_flag(self):
+        runner = CheckRunner()
+
+        # Simulate a running check with a mock aggregate
+        class FakeAggregate:
+            cancelled = False
+
+            def cancel(self):
+                self.cancelled = True
+
+        runner.aggregate = FakeAggregate()
+        runner._last_cache_db = "/tmp/cache.db"
+        result = runner.pause_check()
+        assert runner._pause_requested is True
+        assert runner.aggregate.cancelled is True
+        assert result == "/tmp/cache.db"
+
+    def test_cancel_only_calls_cancel(self):
+        runner = CheckRunner()
+
+        class FakeAggregate:
+            cancelled = False
+
+            def cancel(self):
+                self.cancelled = True
+
+        runner.aggregate = FakeAggregate()
+        runner.cancel_check()
+        assert runner.aggregate.cancelled is True
 
     def test_build_config_with_resume(self):
         runner = CheckRunner()

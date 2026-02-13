@@ -141,3 +141,40 @@ class TestHistoryStore:
         assert sessions[0]["total"] == 3
         assert sessions[0]["errors"] == 1
         assert sessions[0]["valid"] == 2
+
+    def test_save_without_stats_counts_warnings(self, store, sample_results):
+        """Warnings count should be computed from results when stats=None."""
+        store.save_session(
+            urls=["http://example.com"],
+            results=sample_results,
+            stats=None,
+            duration=1.0,
+        )
+        sessions = store.get_sessions()
+        # sample_results has 1 result with warnings (the 404 one)
+        assert sessions[0]["warnings"] == 1
+
+    def test_save_with_duration(self, store, sample_results):
+        """Duration should be stored correctly."""
+        store.save_session(
+            urls=["http://example.com"],
+            results=sample_results,
+            stats=None,
+            duration=42.5,
+        )
+        sessions = store.get_sessions()
+        assert sessions[0]["duration"] == 42.5
+
+    def test_connection_closed_after_operations(self, store, sample_results):
+        """Connections should be properly closed after each operation."""
+        store.save_session(
+            urls=["http://example.com"],
+            results=sample_results,
+            stats=FakeStats(),
+            duration=1.0,
+        )
+        sessions = store.get_sessions()
+        assert len(sessions) == 1
+        # Verify we can still do operations (no locked DB)
+        store.delete_session(sessions[0]["id"])
+        assert len(store.get_sessions()) == 0

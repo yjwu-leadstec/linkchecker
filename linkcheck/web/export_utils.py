@@ -104,7 +104,12 @@ def results_to_html(results):
         size = r.get("size", -1) or -1
 
         lines.append("<tr>")
-        lines.append(f'<td><a href="{url}">{url}</a></td>')
+        # Only link http/https URLs to prevent javascript: XSS
+        raw_url = str(r.get("url", ""))
+        if raw_url.lower().startswith(("http://", "https://")):
+            lines.append(f'<td><a href="{url}">{url}</a></td>')
+        else:
+            lines.append(f"<td>{url}</td>")
         lines.append(f"<td>{parent}</td>")
         lines.append(f'<td class="{status_cls}">{status_text}</td>')
         lines.append(f"<td>{result_text}</td>")

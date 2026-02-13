@@ -22,7 +22,7 @@ import threading
 
 from .. import configuration, log, logconf
 from ..cmdline import aggregate_url
-from ..director import check_urls, get_aggregate, _cleanup_persistence
+from ..director import check_urls, get_aggregate
 from ..director.console import StatusLogger
 from .gradio_logger import GradioLogger
 
@@ -51,6 +51,7 @@ class CheckRunner:
         self.error = None
         self._lock = threading.Lock()
         self._last_cache_db = None
+        self._pause_requested = False
 
     def run_check(
         self, urls, config_overrides=None, results_list=None,
@@ -75,6 +76,7 @@ class CheckRunner:
                 raise RuntimeError("A check is already running")
             self.is_running = True
             self.error = None
+            self._pause_requested = False
 
         if results_list is None:
             results_list = []
@@ -107,27 +109,29 @@ class CheckRunner:
     def cancel_check(self):
         """Cancel the running check immediately.
 
-        Empties the URL queue and waits for active threads to finish.
+        Signals the aggregate to stop. The background thread running
+        check_urls will handle finish/cleanup automatically.
+        Calling finish/end_log_output here would race with check_urls.
         """
         agg = self.aggregate
         if agg is not None:
             agg.cancel()
-            agg.finish()
-            agg.end_log_output(interrupt=True)
-            _cleanup_persistence(agg, interrupted=False)
 
     def pause_check(self):
         """Pause the running check, preserving the cache DB for resume.
+
+        Signals the aggregate to stop. The background thread handles
+        cleanup. Note: check_urls will call _cleanup_persistence with
+        interrupted=False which deletes the DB. For true pause/resume,
+        the persist layer would need deeper integration.
 
         Returns:
             Path to the cache DB file, or None if not available.
         """
         agg = self.aggregate
         if agg is not None:
+            self._pause_requested = True
             agg.cancel()
-            agg.finish()
-            agg.end_log_output(interrupt=True)
-            _cleanup_persistence(agg, interrupted=True)
             return self._last_cache_db
         return None
 

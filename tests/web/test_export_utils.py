@@ -90,6 +90,29 @@ class TestResultsToHtml:
         assert "<tbody>" in html
         assert "0 URLs" in html
 
+    def test_html_no_javascript_href(self):
+        """Non-HTTP URLs should not have href attributes (XSS prevention)."""
+        results = [{
+            "url": "javascript:alert(1)",
+            "parent_url": "",
+            "result": "Error",
+            "valid": False,
+            "warnings": [],
+            "checktime": 0,
+            "size": 0,
+            "content_type": "",
+            "level": 0,
+        }]
+        html = results_to_html(results)
+        assert 'href="javascript:' not in html
+        # URL text should still appear in the output
+        assert "javascript:alert(1)" in html
+
+    def test_html_http_urls_linked(self, sample_results):
+        """HTTP URLs should have href links."""
+        html = results_to_html(sample_results)
+        assert 'href="http://example.com"' in html
+
 
 class TestSaveToTempfile:
     def test_creates_file(self):

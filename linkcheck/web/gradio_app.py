@@ -22,6 +22,7 @@ Three tabs:
   3. History — view past sessions and error trends
 """
 
+import json
 import os
 import threading
 import time
@@ -41,21 +42,18 @@ _runner = CheckRunner()
 _history = HistoryStore()
 
 
-def _status_icon(valid):
-    if valid:
-        return "\u2713"
-    return "\u2717"
-
-
 def _build_dataframe_rows(results):
     """Convert result dicts to rows for gr.Dataframe."""
     rows = []
     for r in results:
         valid = r.get("valid", True)
         warnings = r.get("warnings", [])
-        status = _status_icon(valid)
-        if warnings:
-            status = "\u26a0"
+        if not valid:
+            status = "\u2717"  # ✗ error always takes precedence
+        elif warnings:
+            status = "\u26a0"  # ⚠ valid with warnings
+        else:
+            status = "\u2713"  # ✓ valid, no warnings
         checktime = r.get("checktime", 0) or 0
         size = r.get("size", -1) or -1
         rows.append([
@@ -104,6 +102,8 @@ def _run_check_generator(
     if save_to_file and file_path:
         file_loggers = _build_file_loggers(file_path, file_format)
 
+    start_time = time.monotonic()
+
     # Start check in background thread
     check_thread = threading.Thread(
         target=_runner.run_check,
@@ -125,19 +125,22 @@ def _run_check_generator(
         if current_count > last_count:
             last_count = current_count
             rows = _build_dataframe_rows(results_list)
+            elapsed = time.monotonic() - start_time
             yield (
                 gr.update(value=rows),
-                f"Checking... {last_count} URLs processed",
+                f"Checking... {last_count} URLs processed ({elapsed:.1f}s)",
                 gr.update(interactive=False),
                 gr.update(interactive=True),
             )
         time.sleep(0.5)
 
+    duration = time.monotonic() - start_time
+
     # Final update
     rows = _build_dataframe_rows(results_list)
     total = len(results_list)
     errors = sum(1 for r in results_list if not r.get("valid"))
-    status_msg = f"Done! {total} URLs checked, {errors} errors found."
+    status_msg = f"Done! {total} URLs checked, {errors} errors found. ({duration:.1f}s)"
     if _runner.error:
         status_msg = f"Error: {_runner.error}"
 
@@ -145,7 +148,7 @@ def _run_check_generator(
     if results_list and not _runner.error:
         _history.save_session(
             urls, results_list,
-            stats=None, duration=0,
+            stats=None, duration=duration,
         )
 
     yield (
@@ -199,6 +202,8 @@ def _resume_check_generator(
         "checkextern": bool(check_extern),
     }
 
+    start_time = time.monotonic()
+
     check_thread = threading.Thread(
         target=_runner.resume_check,
         kwargs=dict(
@@ -217,22 +222,25 @@ def _resume_check_generator(
         if current_count > last_count:
             last_count = current_count
             rows = _build_dataframe_rows(results_list)
+            elapsed = time.monotonic() - start_time
             yield (
                 gr.update(value=rows),
-                f"Resuming... {last_count} URLs processed",
+                f"Resuming... {last_count} URLs processed ({elapsed:.1f}s)",
                 gr.update(interactive=False),
                 gr.update(interactive=True),
                 gr.update(interactive=False),
             )
         time.sleep(0.5)
 
+    duration = time.monotonic() - start_time
+
     rows = _build_dataframe_rows(results_list)
     total = len(results_list)
     errors = sum(1 for r in results_list if not r.get("valid"))
-    status_msg = f"Done! {total} URLs checked, {errors} errors found."
+    status_msg = f"Done! {total} URLs checked, {errors} errors found. ({duration:.1f}s)"
 
     if results_list:
-        _history.save_session(urls, results_list, stats=None, duration=0)
+        _history.save_session(urls, results_list, stats=None, duration=duration)
 
     yield (
         gr.update(value=rows),
@@ -254,58 +262,86 @@ def _cancel_check():
 
 
 def _build_file_loggers(file_path, file_format):
-    """Build file-output Logger instances for the chosen format."""
+    """Build file-output Logger instances for the chosen format.
+
+    Returns an empty list if the format is unknown or if logger
+    creation fails.
+    """
     loggers = []
-    expanded = os.path.expanduser(file_path)
+    try:
+        expanded = os.path.expanduser(file_path)
+    except (TypeError, RuntimeError):
+        return loggers
     fmt = file_format.lower() if file_format else "csv"
 
-    if fmt == "csv":
-        from ..logger.csvlog import CSVLogger
-        loggers.append(CSVLogger(fileoutput=True, filename=expanded + ".csv"))
-    elif fmt == "html":
-        from ..logger.html import HtmlLogger
-        loggers.append(HtmlLogger(fileoutput=True, filename=expanded + ".html"))
-    elif fmt == "text":
-        from ..logger.text import TextLogger
-        loggers.append(TextLogger(fileoutput=True, filename=expanded + ".txt"))
+    try:
+        if fmt == "csv":
+            from ..logger.csvlog import CSVLogger
+            loggers.append(
+                CSVLogger(fileoutput=True, filename=expanded + ".csv"))
+        elif fmt == "html":
+            from ..logger.html import HtmlLogger
+            loggers.append(
+                HtmlLogger(fileoutput=True, filename=expanded + ".html"))
+        elif fmt == "text":
+            from ..logger.text import TextLogger
+            loggers.append(
+                TextLogger(fileoutput=True, filename=expanded + ".txt"))
+    except Exception:
+        pass
     return loggers
+
+
+def _dataframe_to_results(results_data):
+    """Reconstruct result dicts from gr.Dataframe rows.
+
+    The status column uses ✗ for errors and ✓/⚠ for valid URLs.
+    """
+    if results_data is None:
+        return []
+    try:
+        rows = results_data.values.tolist()
+    except AttributeError:
+        return []
+    if not rows:
+        return []
+    results = []
+    for row in rows:
+        # ✗ = invalid, ✓ or ⚠ = valid
+        valid = row[2] != "\u2717"
+        try:
+            checktime = float(row[4])
+        except (ValueError, TypeError):
+            checktime = 0
+        try:
+            size = int(row[5]) if row[5] not in ("-", "") else -1
+        except (ValueError, TypeError):
+            size = -1
+        results.append({
+            "url": row[0],
+            "parent_url": row[1],
+            "valid": valid,
+            "result": row[3],
+            "checktime": checktime,
+            "size": size,
+        })
+    return results
 
 
 def _export_csv(results_data):
     """Export current results as CSV file."""
-    if not results_data or not results_data.values.tolist():
+    results = _dataframe_to_results(results_data)
+    if not results:
         return None
-    # Re-build result dicts from dataframe rows
-    rows = results_data.values.tolist()
-    results = []
-    for row in rows:
-        results.append({
-            "url": row[0],
-            "parent_url": row[1],
-            "valid": row[2] == "\u2713",
-            "result": row[3],
-            "checktime": float(row[4]) if row[4] else 0,
-            "size": int(row[5]) if row[5] not in ("-", "") else -1,
-        })
     csv_content = results_to_csv(results)
     return save_to_tempfile(csv_content, suffix=".csv")
 
 
 def _export_html(results_data):
     """Export current results as HTML file."""
-    if not results_data or not results_data.values.tolist():
+    results = _dataframe_to_results(results_data)
+    if not results:
         return None
-    rows = results_data.values.tolist()
-    results = []
-    for row in rows:
-        results.append({
-            "url": row[0],
-            "parent_url": row[1],
-            "valid": row[2] == "\u2713",
-            "result": row[3],
-            "checktime": float(row[4]) if row[4] else 0,
-            "size": int(row[5]) if row[5] not in ("-", "") else -1,
-        })
     html_content = results_to_html(results)
     return save_to_tempfile(html_content, suffix=".html")
 
@@ -333,9 +369,12 @@ def _save_config(config_path, content):
     path = config_path.strip() if config_path else _get_default_config_path()
     if not path:
         return "No path specified."
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+    except OSError as e:
+        return f"Error saving: {e}"
     return f"Saved: {path}"
 
 
@@ -353,7 +392,7 @@ def _load_history():
         try:
             url_list = ", ".join(
                 u[:50] for u in (
-                    __import__("json").loads(urls) if isinstance(urls, str) else urls
+                    json.loads(urls) if isinstance(urls, str) else urls
                 )
             )
         except Exception:
@@ -371,18 +410,21 @@ def _load_history():
 
 
 def _load_trend_plot(url_filter="", days=30):
-    """Generate a matplotlib trend plot."""
+    """Generate a matplotlib trend plot.
+
+    Uses Figure() directly instead of plt.subplots() to avoid
+    accumulating figures in pyplot's global state.
+    """
     try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+        from matplotlib.figure import Figure
     except ImportError:
         return None
 
     pattern = url_filter.strip() if url_filter else None
     data = _history.get_trend_data(url_pattern=pattern, days=int(days))
 
-    fig, ax = plt.subplots(figsize=(8, 4))
+    fig = Figure(figsize=(8, 4))
+    ax = fig.add_subplot(111)
     if data:
         dates = [d[0] for d in data]
         errors = [d[1] for d in data]
@@ -392,14 +434,16 @@ def _load_trend_plot(url_filter="", days=30):
         ax.set_xlabel("Date")
         ax.set_ylabel("Count")
         ax.legend()
-        plt.xticks(rotation=45, ha="right")
+        for tick in ax.get_xticklabels():
+            tick.set_rotation(45)
+            tick.set_ha("right")
     else:
         ax.text(
             0.5, 0.5, "No data available",
             ha="center", va="center", transform=ax.transAxes,
         )
     ax.set_title("Link Check Trends")
-    plt.tight_layout()
+    fig.tight_layout()
     return fig
 
 

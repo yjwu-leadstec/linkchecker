@@ -62,6 +62,26 @@ CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at);
 class HistoryStore:
     """SQLite WAL-mode store for check session history."""
 
+    class _Connection:
+        """Context manager that commits and closes the connection."""
+
+        def __init__(self, db_path):
+            self.conn = sqlite3.connect(db_path)
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA foreign_keys=ON")
+            self.conn.row_factory = sqlite3.Row
+
+        def __enter__(self):
+            return self.conn
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            if exc_type is None:
+                self.conn.commit()
+            else:
+                self.conn.rollback()
+            self.conn.close()
+            return False
+
     def __init__(self, db_path=None):
         self.db_path = db_path or _DB_PATH
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
@@ -72,11 +92,7 @@ class HistoryStore:
             conn.executescript(_SCHEMA)
 
     def _connect(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.row_factory = sqlite3.Row
-        return conn
+        return self._Connection(self.db_path)
 
     def save_session(self, urls, results, stats, duration):
         """Save a completed check session.
@@ -106,7 +122,8 @@ class HistoryStore:
                     sum(1 for r in results if r.get("valid")),
                     stats.errors if stats else
                     sum(1 for r in results if not r.get("valid")),
-                    stats.warnings if stats else 0,
+                    stats.warnings if stats else
+                    sum(1 for r in results if r.get("warnings")),
                 ),
             )
             for r in results:
