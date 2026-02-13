@@ -272,6 +272,25 @@ class ArgParser(LCArgumentParser):
                 "Default: linkchecker-cache.db in the current directory."
             ),
         )
+        group.add_argument(
+            "--web",
+            action="store_true",
+            default=False,
+            help=_(
+                "Start the web interface instead of the command line.\n"
+                "Requires: pip install linkchecker[web]"
+            ),
+        )
+        group.add_argument(
+            "--web-port",
+            type=int,
+            default=7860,
+            dest="web_port",
+            metavar="PORT",
+            help=_(
+                "Port for the web interface (default: 7860)."
+            ),
+        )
 
         # ================== output options =====================
         group = self.add_argument_group(_("Output options"))

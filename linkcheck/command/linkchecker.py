@@ -116,6 +116,26 @@ def linkchecker():
 
     # read and parse command line options and arguments
     options = argparser.parse_args()
+
+    # Web UI mode — early exit before normal CLI flow
+    if getattr(options, 'web', False):
+        try:
+            from ..web.gradio_app import create_app
+        except ImportError:
+            print(
+                "Web UI requires gradio. Install with:\n"
+                "  pip install linkchecker[web]",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        app = create_app()
+        app.launch(
+            server_port=getattr(options, 'web_port', 7860),
+            share=False,
+            inbrowser=True,
+        )
+        sys.exit(0)
+
     # configure application logging
     if options.debug:
         allowed_debugs = logconf.lognames.keys()
