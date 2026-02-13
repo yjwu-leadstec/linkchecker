@@ -53,6 +53,10 @@ linkcheck/_release.py
 
 # AI generated files
 .agent/
+.serena/
+.mcp/
+mcp-config.json
+.gemini/
 *.code-workspace
 CLAUDE.md
 .cursorrules
